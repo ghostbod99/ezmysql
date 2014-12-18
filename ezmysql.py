@@ -1,5 +1,6 @@
-#!/usr/bin/env python
-#coding: utf8
+# -*- coding: utf-8 -*-
+
+
 #
 # Copyright 2013 Ebuinfo
 #
@@ -19,13 +20,11 @@
 """
 
 from __future__ import absolute_import, division, with_statement
-
 import itertools
 import logging
 import time
-
+import sys
 import umysql
-
 
 __title__ = 'ezmysql'
 __version__ = "1.0"
@@ -40,7 +39,7 @@ class Connection(object):
     It provides wrapped rows in a dict/object so that
     columns can be accessed by name. Typical usage::
 
-        db = ezmysql.Connection("localhost", "mydatabase")
+        db = umysql_helper.Connection("localhost", "mydatabase")
         for article in db.query("SELECT * FROM articles"):
             print article.title
 
@@ -57,10 +56,13 @@ class Connection(object):
         2. We explicitly set the character encoding to UTF-8
            on all connections to avoid encoding errors.
     """
-    def __init__(self, host, user, password,
+    def __init__(self, host, port, user, password,
                  database='',
                  charset='utf8'):
+
+
         self.host = host
+        self.port = port
         self.charset = charset
 
         args = dict(
@@ -77,7 +79,7 @@ class Connection(object):
             args["port"] = int(pair[1])
         else:
             args["host"] = host
-            args["port"] = 3306
+            args["port"] = port
 
         self._db = None
         self._db_args = args
@@ -87,6 +89,17 @@ class Connection(object):
         except Exception:
             logging.error("Cannot connect to MySQL on %s", self.host,
                           exc_info=True)
+        #print 'obj init end'
+
+    # @classmethod
+    # def getConnect(cls, host, port, user, password, db):
+    #     conn = Connection(host, user, password, db)
+    #     sql = 'create database if not exists %s' % db
+    #     conn.execute(sql)
+    #     conn.execute('use %s' % db)
+    #     return conn
+
+
 
     def __del__(self):
         self.close()
@@ -99,18 +112,29 @@ class Connection(object):
 
     def reconnect(self):
         """Closes the existing database connection and re-opens it."""
-        print 'reconnecting MySQL ...'
-        self.close()
+        #print 'reconnecting MySQL ...'
+        #self.close()
         self._db = umysql.Connection()
+
+        # print self._db_args['host']
+        # print self._db_args['port']
+        # print self._db_args['user']
+        # print self._db_args['password']
+        # print self._db_args['db']
+        # print self._db_args['autocommit']
+        # print self._db_args['charset']
+
         self._db.connect(
             self._db_args['host'],
-            self._db_args['port'],
+            (int)(self._db_args['port']),
             self._db_args['user'],
             self._db_args['password'],
             self._db_args['db'],
             self._db_args['autocommit'],
-            self._db_args['charset'],
+            self._db_args['charset']
         )
+
+        #print 'self._db.connect:', self._db
 
     def escape(self, s):
         return s.replace('\\', '\\\\').replace('"', '\\\"').replace("'", "\\\'")
@@ -182,12 +206,95 @@ class Connection(object):
         args.append(where_value)
         return self.execute(sql, *args)
 
+
+    def select_table_by_fields(self, table_name, select_fields,
+                     where_dict, limit_conf=None, select_type="list"):
+        selects = []
+        for k in select_fields:
+            s = '%s' % k
+            selects.append(s)
+        selects = ','.join(selects)
+
+
+        wheres = []
+        for k in where_dict.keys():
+            s = '%s=%%s' % k
+            wheres.append(s)
+        wheres = " AND ".join(wheres)
+
+        sql = 'SELECT %s FROM %s WHERE %s' % (
+            selects,
+            table_name,
+            wheres
+        )
+
+        if limit_conf is not None:
+            select_type = "list"
+            sql += ' LIMIT %s, %s' % (limit_conf['start'], limit_conf['count'])
+
+        args = where_dict.values()
+        
+        print sql, args
+
+        if select_type=="get":
+            return self.get(sql+" LIMIT 1", *args)
+        else:
+            return self.query(sql, *args)
+
+
+
+
+
+    def update_table_by_fields(self, table_name, updates,
+                     where_fields, where_values):
+        sets = []
+        for k in updates.keys():
+            s = '%s=%%s' % k
+            sets.append(s)
+        sets = ','.join(sets)
+        wheres = []
+        for k in where_fields:
+            s = '%s=%%s' % k
+            wheres.append(s)
+        wheres = " AND ".join(wheres)
+
+        sql = 'UPDATE %s SET %s WHERE %s' % (
+            table_name,
+            sets,
+            wheres
+        )
+        args = updates.values()
+        args += where_values
+
+        print sql, args
+        return self.execute(sql, *args)
+
+
+    def delete_table_by_fields(self, table_name,
+                     where_fields, where_values):
+        wheres = []
+        for k in where_fields:
+            s = '%s=%%s' % k
+            wheres.append(s)
+        wheres = " AND ".join(wheres)
+
+        sql = 'DELETE FROM %s WHERE %s' % (
+            table_name,
+            wheres
+        )
+        args = where_values
+        print sql
+        print args
+        return self.execute(sql, *args)
+
+
     def item_to_table(self, table_name, item):
         '''item if a dict : key is mysql table field'''
         fields = ','.join(item.keys())
         valstr = ','.join(['%s'] * len(item))
         sql = 'INSERT INTO %s (%s) VALUES(%s)' % (table_name, fields, valstr)
         try:
+            print sql, item.values()
             r = self.execute(sql, *(item.values()))
             return r
         except Exception, e:
@@ -195,9 +302,9 @@ class Connection(object):
             if e[0] == 1062: # just skip duplicated item
                 pass
             else:
-                print 'item:'
-                for k,v in item.items():
-                    print k, ' : ', v
+                # print 'item:'
+                # for k,v in item.items():
+                #     print k, ' : ', v
                 raise e
 
     def items_to_table(self, table_name, items):
@@ -222,4 +329,15 @@ class Row(dict):
             raise AttributeError(name)
 
 
+
+if __name__ == "__main__":
+    cnn = umysql.Connection()
+    cnn.connect ("127.0.0.1", 3306, "root", "123456", "tracking_db")
+    try:
+        #cnn = umysql.Connection()
+        cnn.connect ("127.0.0.1", 3306, "root", "123456", "tracking_db")
+    except Exception, e:
+     print e[1]
+    pass
+    cnn.close()
 
